@@ -1,10 +1,13 @@
-require('dotenv').config();
 
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const http = require('http');
+const socketio = require('socket.io');
+const path = require('path');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -14,48 +17,61 @@ const bookingRoutes = require('./routes/bookings');
 const exportRoutes = require('./routes/exports');
 const contactRoutes = require('./routes/contact');
 
-const app = express();
+// Import socket handlers
+const { setupSocketHandlers } = require('./socket');
 
-// CORS
+// Initialize express app
+const app = express();
+const server = http.createServer(app);
+
+app.get('/',(req, res) => {
+  res.send('server is running')
+})
+
+const allowedOrigins = [
+  'http://localhost:8080',
+  'https://classroom-booking-eight.vercel.app'
+];
+
+// Initialize socket.io
+const io = socketio(server, {
+  cors: {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+  }
+});
+
+// Middleware
+app.use(helmet());
+
 app.use(cors({
-  origin: [
-    'http://localhost:8080',
-    process.env.CLIENT_URL
-  ],
-  credentials: true
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(helmet());
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
 
-// Health check
-app.get('/', (req, res) => {
-  res.status(200).send('Server is running');
-});
-
-// Database connection
-const connectDB = async () => {
-  if (mongoose.connection.readyState === 1) return;
-
-  await mongoose.connect(process.env.MONGODB_URI);
-};
-
-// Database middleware
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (error) {
-    console.error('Database error:', error.message);
-
-    res.status(500).json({
-      success: false,
-      message: 'Database connection failed'
-    });
-  }
-});
+// Set up socket handlers
+setupSocketHandlers(io);
 
 // API routes
 app.use('/api/auth', authRoutes);
@@ -65,14 +81,40 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/exports', exportRoutes);
 app.use('/api/contact', contactRoutes);
 
-// Error handler
+// Serve static assets in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../build')));
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '../build', 'index.html'));
+  });
+}
+
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-
   res.status(500).json({
-    success: false,
-    message: 'Server error'
+    message: 'Server error',
+    error: process.env.NODE_ENV === 'production' ? {} : err
   });
 });
 
-module.exports = app;
+// Connect to MongoDB
+mongoose
+  .connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+  })
+  // .then(() => {
+  //   console.log('Connected to MongoDB');
+  //   // Start server
+  //   const PORT = process.env.PORT || 5000;
+  //   server.listen(PORT, () => {
+  //     console.log(`Server running on port ${PORT}`);
+  //   });
+  // })
+  .catch((err) => {
+    console.error('Error connecting to MongoDB:', err.message);
+    process.exit(1);
+  });
+
+  export default app;
