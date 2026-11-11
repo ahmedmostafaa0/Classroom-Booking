@@ -1,13 +1,10 @@
-
 require('dotenv').config();
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const http = require('http');
-const socketio = require('socket.io');
-const path = require('path');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -17,38 +14,48 @@ const bookingRoutes = require('./routes/bookings');
 const exportRoutes = require('./routes/exports');
 const contactRoutes = require('./routes/contact');
 
-// Import socket handlers
-const { setupSocketHandlers } = require('./socket');
-
-// Initialize express app
 const app = express();
-const server = http.createServer(app);
 
-app.get('/',(req, res) => {
-  res.send('server is running')
-})
-
-// Initialize socket.io
-const io = socketio(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:8080',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true
-  }
-});
-
-// Middleware
-app.use(helmet());
+// CORS
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:8080',
+  origin: [
+    'http://localhost:8080',
+    process.env.CLIENT_URL
+  ],
   credentials: true
 }));
+
+app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
 
-// Set up socket handlers
-setupSocketHandlers(io);
+// Health check
+app.get('/', (req, res) => {
+  res.status(200).send('Server is running');
+});
+
+// Database connection
+const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) return;
+
+  await mongoose.connect(process.env.MONGODB_URI);
+};
+
+// Database middleware
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error('Database error:', error.message);
+
+    res.status(500).json({
+      success: false,
+      message: 'Database connection failed'
+    });
+  }
+});
 
 // API routes
 app.use('/api/auth', authRoutes);
@@ -58,40 +65,14 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/exports', exportRoutes);
 app.use('/api/contact', contactRoutes);
 
-// Serve static assets in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../build')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, '../build', 'index.html'));
-  });
-}
-
-// Error handling middleware
+// Error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
+
   res.status(500).json({
-    message: 'Server error',
-    error: process.env.NODE_ENV === 'production' ? {} : err
+    success: false,
+    message: 'Server error'
   });
 });
 
-// Connect to MongoDB
-mongoose
-  .connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-  })
-  // .then(() => {
-  //   console.log('Connected to MongoDB');
-  //   // Start server
-  //   const PORT = process.env.PORT || 5000;
-  //   server.listen(PORT, () => {
-  //     console.log(`Server running on port ${PORT}`);
-  //   });
-  // })
-  .catch((err) => {
-    console.error('Error connecting to MongoDB:', err.message);
-    process.exit(1);
-  });
-
-  export default app;
+module.exports = app;
