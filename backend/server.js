@@ -24,6 +24,10 @@ const { setupSocketHandlers } = require('./socket');
 const app = express();
 const server = http.createServer(app);
 
+app.get('/',(req, res) => {
+  res.send('server is running')
+})
+
 // Initialize socket.io
 const io = socketio(server, {
   cors: {
